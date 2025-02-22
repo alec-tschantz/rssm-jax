@@ -15,7 +15,7 @@ class Prior(eqx.Module):
     rnn_cell: eqx.nn.GRUCell
     fc_input: eqx.nn.Linear
     fc_rnn_hidden: eqx.nn.Linear
-    fc_out: eqx.nn.Linear
+    fc_output: eqx.nn.Linear
 
     def __init__(
         self,
@@ -35,16 +35,18 @@ class Prior(eqx.Module):
         self.fc_rnn_hidden = eqx.nn.Linear(
             in_features=rnn_hidden_dim, out_features=mlp_hidden_dim, key=k3
         )
-        self.fc_out = eqx.nn.Linear(
+        self.fc_output = eqx.nn.Linear(
             in_features=mlp_hidden_dim, out_features=2 * state_dim, key=k4
         )
 
     def __call__(self, prev_post: State, action: Array, key: jr.PRNGKey) -> State:
         inp = jnp.concatenate([action, prev_post.sample], axis=-1)
-        h = nn.elu(self.fc_input(inp))
-        new_rnn_hidden = self.rnn_cell(h, prev_post.rnn_hidden)
-        h2 = nn.elu(self.fc_rnn_hidden(new_rnn_hidden))
-        out = self.fc_out(h2)
+
+        hidden = nn.elu(self.fc_input(inp))
+        new_rnn_hidden = self.rnn_cell(hidden, prev_post.rnn_hidden)
+        hidden = nn.elu(self.fc_rnn_hidden(new_rnn_hidden))
+        out = self.fc_output(hidden)
+
         mean, std = jnp.split(out, 2, axis=-1)
         std = nn.softplus(std) + 0.1
         new_sample = sample_normal(key, mean, std)
@@ -52,8 +54,8 @@ class Prior(eqx.Module):
 
 
 class Posterior(eqx.Module):
-    fc_in: eqx.nn.Linear
-    fc_out: eqx.nn.Linear
+    fc_input: eqx.nn.Linear
+    fc_output: eqx.nn.Linear
 
     def __init__(
         self,
@@ -64,19 +66,21 @@ class Posterior(eqx.Module):
         key: jr.PRNGKey,
     ):
         k1, k2 = jr.split(key, 2)
-        self.fc_in = eqx.nn.Linear(
+        self.fc_input = eqx.nn.Linear(
             in_features=rnn_hidden_dim + obs_emb_dim,
             out_features=mlp_hidden_dim,
             key=k1,
         )
-        self.fc_out = eqx.nn.Linear(
+        self.fc_output = eqx.nn.Linear(
             in_features=mlp_hidden_dim, out_features=2 * state_dim, key=k2
         )
 
     def __call__(self, obs_emb: Array, prior: State, key: jr.PRNGKey) -> State:
-        x = jnp.concatenate([prior.rnn_hidden, obs_emb], axis=-1)
-        h = nn.elu(self.fc_in(x))
-        out = self.fc_out(h)
+        inp = jnp.concatenate([prior.rnn_hidden, obs_emb], axis=-1)
+
+        hidden = nn.elu(self.fc_input(inp))
+        out = self.fc_output(hidden)
+
         mean, std = jnp.split(out, 2, axis=-1)
         std = nn.softplus(std) + 0.1
         new_sample = sample_normal(key, mean, std)
@@ -167,8 +171,8 @@ class Encoder(eqx.Module):
         )
 
     def __call__(self, obs: Array) -> Array:
-        h = nn.elu(self.fc1(obs))
-        return self.fc2(h)
+        hidden = nn.elu(self.fc1(obs))
+        return self.fc2(hidden)
 
 
 class Decoder(eqx.Module):
@@ -187,12 +191,14 @@ class Decoder(eqx.Module):
         self.fc1 = eqx.nn.Linear(
             in_features=state_dim + rnn_hidden_dim, out_features=mlp_hidden_dim, key=k1
         )
-        self.fc2 = eqx.nn.Linear(in_features=mlp_hidden_dim, out_features=obs_dim, key=k2)
+        self.fc2 = eqx.nn.Linear(
+            in_features=mlp_hidden_dim, out_features=obs_dim, key=k2
+        )
 
     def __call__(self, post: Array) -> Array:
         inp = jnp.concatenate([post.sample, post.rnn_hidden], axis=-1)
-        h = nn.elu(self.fc1(inp))
-        return self.fc2(h)
+        hidden = nn.elu(self.fc1(inp))
+        return self.fc2(hidden)
 
 
 def rssm_loss(
@@ -202,15 +208,12 @@ def rssm_loss(
     key: jr.PRNGKey,
 ) -> Tuple[Array, Array]:
     model, encoder, decoder = params
-    B, T, D_obs = obs_seq.shape
+    B, _, _ = obs_seq.shape
 
-    obs_seq_flat = obs_seq.reshape((B * T, D_obs))
-    obs_emb_flat = vmap(encoder)(obs_seq_flat)
-    obs_emb = obs_emb_flat.reshape((B, T, -1))
-
-    keys = jr.split(key, B)
-    init_post = model.init_post((B,))
-    post_seq, prior_seq = vmap(model.rollout)(obs_emb, init_post, action_seq, keys)
+    obs_emb = vmap(vmap(encoder))(obs_seq)
+    post_seq, prior_seq = vmap(model.rollout)(
+        obs_emb, model.init_post((B,)), action_seq, jr.split(key, B)
+    )
     out_seq = vmap(vmap(decoder))(post_seq)
 
     obs_loss = mse_loss(model, out_seq, obs_seq)
