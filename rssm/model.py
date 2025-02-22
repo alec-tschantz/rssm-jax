@@ -166,8 +166,8 @@ class Encoder(eqx.Module):
             in_features=mlp_hidden_dim, out_features=obs_embed_dim, key=k2
         )
 
-    def __call__(self, x: Array) -> Array:
-        h = nn.elu(self.fc1(x))
+    def __call__(self, obs: Array) -> Array:
+        h = nn.elu(self.fc1(obs))
         return self.fc2(h)
 
 
@@ -208,9 +208,8 @@ def rssm_loss(
     obs_emb_flat = vmap(encoder)(obs_seq_flat)
     obs_emb = obs_emb_flat.reshape((B, T, -1))
 
-    init_post = model.init_post((B,))
-
     keys = jr.split(key, B)
+    init_post = model.init_post((B,))
     post_seq, prior_seq = vmap(model.rollout)(obs_emb, init_post, action_seq, keys)
     out_seq = vmap(vmap(decoder))(post_seq)
 
