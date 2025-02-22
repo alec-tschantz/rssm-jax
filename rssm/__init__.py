@@ -1,1 +1,1 @@
-from .model import State, Prior, Posterior, Model, rssm_loss
+from .model import Model, Encoder, Decoder, rssm_loss
