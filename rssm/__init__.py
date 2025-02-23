@@ -1,11 +1,10 @@
 from .model import (
-    init_model,
-    init_encoder,
-    init_decoder,
     init_post_state,
     forward_encoder,
     forward_decoder,
-    rollout_model,
-    rollout_model_prior,
-    rssm_loss,
+    forward_model,
+    rollout_dynamics,
+    rollout_dynamics_prior,
 )
+
+from .utils import init_model, mse_loss, kl_divergence
