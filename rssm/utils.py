@@ -43,12 +43,12 @@ def init_prior(
             hidden_size=state_dim,
             key=k2,
         ),
-        fc_rnn_hidden=eqx.nn.Linear(
+        fc_state=eqx.nn.Linear(
             in_features=state_dim,
             out_features=hidden_dim,
             key=k3,
         ),
-        fc_output=eqx.nn.Linear(
+        fc_latent=eqx.nn.Linear(
             in_features=hidden_dim,
             out_features=2 * latent_dim,
             key=k4,
@@ -70,7 +70,7 @@ def init_posterior(
             out_features=hidden_dim,
             key=k1,
         ),
-        fc_output=eqx.nn.Linear(
+        fc_latent=eqx.nn.Linear(
             in_features=hidden_dim,
             out_features=2 * latent_dim,
             key=k2,

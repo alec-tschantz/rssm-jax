@@ -7,13 +7,13 @@ from jax import Array, numpy as jnp, random as jr, nn, lax, vmap
 class Prior(eqx.Module):
     rnn_cell: eqx.nn.GRUCell
     fc_input: eqx.nn.Linear
-    fc_rnn_hidden: eqx.nn.Linear
-    fc_output: eqx.nn.Linear
+    fc_state: eqx.nn.Linear
+    fc_latent: eqx.nn.Linear
 
 
 class Posterior(eqx.Module):
     fc_input: eqx.nn.Linear
-    fc_output: eqx.nn.Linear
+    fc_latent: eqx.nn.Linear
 
 
 class Encoder(eqx.Module):
@@ -50,11 +50,11 @@ def forward_prior(
 ) -> State:
     feat = jnp.concatenate([action, prev_post.latent], axis=-1)
     hidden = nn.elu(prior.fc_input(feat))
-    new_rnn_hidden = prior.rnn_cell(hidden, prev_post.state)
-    hidden = nn.elu(prior.fc_rnn_hidden(new_rnn_hidden))
-    out = prior.fc_output(hidden)
-    mean, std, sample = forward_normal(out, key)
-    return State(mean, std, sample, new_rnn_hidden)
+    state = prior.rnn_cell(hidden, prev_post.state)
+    hidden = nn.elu(prior.fc_state(state))
+    latent = prior.fc_latent(hidden)
+    mean, std, sample = forward_normal(latent, key)
+    return State(mean, std, sample, state)
 
 
 def forward_posterior(
@@ -65,8 +65,8 @@ def forward_posterior(
 ) -> State:
     inp = jnp.concatenate([prior_state.state, obs_emb], axis=-1)
     hidden = nn.elu(posterior.fc_input(inp))
-    out = posterior.fc_output(hidden)
-    mean, std, sample = forward_normal(out, key)
+    latent = posterior.fc_latent(hidden)
+    mean, std, sample = forward_normal(latent, key)
     return State(mean, std, sample, prior_state.state)
 
 
