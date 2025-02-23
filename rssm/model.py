@@ -50,8 +50,10 @@ def forward_prior(
 ) -> State:
     feat = jnp.concatenate([action, prev_post.latent], axis=-1)
     hidden = nn.elu(prior.fc_input(feat))
+
     state = prior.rnn_cell(hidden, prev_post.state)
     hidden = nn.elu(prior.fc_state(state))
+
     latent = prior.fc_latent(hidden)
     mean, std, sample = forward_normal(latent, key)
     return State(mean, std, sample, state)
@@ -65,6 +67,7 @@ def forward_posterior(
 ) -> State:
     inp = jnp.concatenate([prior_state.state, obs_emb], axis=-1)
     hidden = nn.elu(posterior.fc_input(inp))
+
     latent = posterior.fc_latent(hidden)
     mean, std, sample = forward_normal(latent, key)
     return State(mean, std, sample, prior_state.state)
@@ -84,6 +87,20 @@ def forward_model(
     )
     out_seq = vmap(lambda s: forward_decoder(model.decoder, s))(post_seq)
     return out_seq, post_seq, prior_seq
+
+
+def forward_dynamics(
+    prior: Prior,
+    post: Posterior,
+    obs: Array,
+    prev_post: State,
+    action: Array,
+    key: jr.PRNGKey,
+) -> State:
+    keys = jr.split(key, 2)
+    prior_ = forward_prior(prior, prev_post, action, keys[0])
+    post_ = forward_posterior(post, obs, prior_, keys[1])
+    return post_, prior_
 
 
 def forward_encoder(encoder: Encoder, obs: Array) -> Array:
@@ -106,7 +123,7 @@ def forward_normal(out: Array, key: jr.PRNGKey) -> Tuple[Array, Array, Array]:
 
 def rollout_dynamics(
     prior: Prior,
-    posterior: Posterior,
+    post: Posterior,
     obs_emb_seq: Array,
     init_post: State,
     action_seq: Array,
@@ -114,9 +131,7 @@ def rollout_dynamics(
 ) -> Tuple[State, State]:
     def step(prev_post, step):
         k_, ob_, act_ = step
-        keys = jr.split(k_, 2)
-        prior_ = forward_prior(prior, prev_post, act_, keys[0])
-        post_ = forward_posterior(posterior, ob_, prior_, keys[1])
+        post_, prior_ = forward_dynamics(prior, post, ob_, prev_post, act_, k_)
         return post_, (post_, prior_)
 
     keys = jr.split(key, action_seq.shape[0])
