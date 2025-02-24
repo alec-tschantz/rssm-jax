@@ -131,22 +131,3 @@ def init_decoder(
             key=k2,
         ),
     )
-
-
-def kl_loss(prior_logits: Array, post_logits: Array, free_nats: float = 0.0, alpha: float = 0.8) -> Array:
-    kl_lhs = optax.losses.kl_divergence_with_log_targets(
-        lax.stop_gradient(post_logits), prior_logits
-    ).sum(axis=-1)
-    kl_rhs = optax.losses.kl_divergence_with_log_targets(
-        post_logits, lax.stop_gradient(prior_logits)
-    ).sum(axis=-1)
-    kl_lhs = jnp.mean(kl_lhs)
-    kl_rhs = jnp.mean(kl_rhs)
-    if free_nats > 0.0:
-        kl_lhs = jnp.maximum(kl_lhs, free_nats)
-        kl_rhs = jnp.maximum(kl_rhs, free_nats)
-    return (alpha * kl_lhs) + ((1 - alpha) *  kl_rhs)
-
-
-def mse_loss(out_seq: Array, obs_seq: Array) -> Array:
-    return jnp.mean(jnp.sum((out_seq - obs_seq) ** 2, axis=-1))

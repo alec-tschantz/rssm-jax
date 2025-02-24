@@ -48,7 +48,8 @@ class State(NamedTuple):
 def forward_prior(
     prior: Prior, prev_post: State, action: Array, key: jr.PRNGKey
 ) -> State:
-    feat = jnp.concatenate([action, prev_post.sample.reshape(-1)], axis=-1)
+    prev_sample = prev_post.sample.reshape(-1)
+    feat = jnp.concatenate([action, prev_sample], axis=-1)
     hidden = nn.silu(prior.fc_input(feat))
     state = prior.rnn_cell(hidden, prev_post.state)
     hidden = nn.silu(prior.fc_state(state))
@@ -78,7 +79,19 @@ def forward_decoder(decoder: Decoder, post: State) -> Array:
     return decoder.fc2(hidden)
 
 
-def rollout_dynamics(
+def forward_model(
+    model: Model, obs_seq: Array, action_seq: Array, key: jr.PRNGKey
+) -> Tuple[Array, State, State]:
+    obs_emb_seq = vmap(lambda o: forward_encoder(model.encoder, o))(obs_seq)
+    init_post = init_post_state(model)
+    post_seq, prior_seq = rollout(
+        model.prior, model.posterior, obs_emb_seq, init_post, action_seq, key
+    )
+    out_seq = vmap(lambda s: forward_decoder(model.decoder, s))(post_seq)
+    return out_seq, post_seq, prior_seq
+
+
+def rollout(
     prior: Prior,
     post: Posterior,
     obs_emb_seq: Array,
@@ -100,7 +113,7 @@ def rollout_dynamics(
     return post_seq, prior_seq
 
 
-def rollout_dynamics_prior(
+def rollout_prior(
     prior: Prior, init_post: State, action_seq: Array, key: jr.PRNGKey
 ) -> State:
     def step(prev_s, step):
@@ -111,18 +124,6 @@ def rollout_dynamics_prior(
     keys = jr.split(key, action_seq.shape[0])
     _, states = lax.scan(step, init_post, (keys, action_seq))
     return states
-
-
-def forward_model(
-    model: Model, obs_seq: Array, action_seq: Array, key: jr.PRNGKey
-) -> Tuple[Array, State, State]:
-    obs_emb_seq = vmap(lambda o: forward_encoder(model.encoder, o))(obs_seq)
-    init_p = init_post_state(model)
-    post_seq, prior_seq = rollout_dynamics(
-        model.prior, model.posterior, obs_emb_seq, init_p, action_seq, key
-    )
-    out_seq = vmap(lambda s: forward_decoder(model.decoder, s))(post_seq)
-    return out_seq, post_seq, prior_seq
 
 
 def sample_logits(logits: Array, key: jr.PRNGKey, unimix: float = 0.01) -> Array:

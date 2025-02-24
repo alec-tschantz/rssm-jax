@@ -3,8 +3,9 @@ from .model import (
     forward_encoder,
     forward_decoder,
     forward_model,
-    rollout_dynamics,
-    rollout_dynamics_prior,
+    rollout,
+    rollout_prior,
 )
 
-from .utils import init_model, mse_loss, kl_loss
+from . import utils 
+from . import train
