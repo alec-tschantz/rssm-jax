@@ -1,6 +1,6 @@
-from typing import NamedTuple, Tuple
-
+import optax
 import equinox as eqx
+from typing import NamedTuple, Tuple
 from jax import Array, numpy as jnp, random as jr, nn, lax, vmap
 
 
@@ -8,12 +8,16 @@ class Prior(eqx.Module):
     rnn_cell: eqx.nn.GRUCell
     fc_input: eqx.nn.Linear
     fc_state: eqx.nn.Linear
-    fc_latent: eqx.nn.Linear
+    fc_logits: eqx.nn.Linear
+    num_discrete: int
+    discrete_dim: int
 
 
 class Posterior(eqx.Module):
     fc_input: eqx.nn.Linear
-    fc_latent: eqx.nn.Linear
+    fc_logits: eqx.nn.Linear
+    num_discrete: int
+    discrete_dim: int
 
 
 class Encoder(eqx.Module):
@@ -31,94 +35,47 @@ class Model(eqx.Module):
     posterior: Posterior
     encoder: Encoder
     decoder: Decoder
-    latent_dim: int
+    logit_dim: int
     state_dim: int
 
 
 class State(NamedTuple):
-    mean: Array
-    std: Array
-    latent: Array
+    logits: Array
+    sample: Array
     state: Array
 
 
 def forward_prior(
-    prior: Prior,
-    prev_post: State,
-    action: Array,
-    key: jr.PRNGKey,
+    prior: Prior, prev_post: State, action: Array, key: jr.PRNGKey
 ) -> State:
-    feat = jnp.concatenate([action, prev_post.latent], axis=-1)
-    hidden = nn.elu(prior.fc_input(feat))
-
+    feat = jnp.concatenate([action, prev_post.sample.reshape(-1)], axis=-1)
+    hidden = nn.silu(prior.fc_input(feat))
     state = prior.rnn_cell(hidden, prev_post.state)
-    hidden = nn.elu(prior.fc_state(state))
-
-    latent = prior.fc_latent(hidden)
-    mean, std, sample = forward_normal(latent, key)
-    return State(mean, std, sample, state)
+    hidden = nn.silu(prior.fc_state(state))
+    logits = prior.fc_logits(hidden).reshape(prior.num_discrete, prior.discrete_dim)
+    logits, sample = sample_logits(logits, key)
+    return State(logits, sample, state)
 
 
 def forward_posterior(
-    posterior: Posterior,
-    obs_emb: Array,
-    prior_state: State,
-    key: jr.PRNGKey,
+    post: Posterior, obs_emb: Array, prior_state: State, key: jr.PRNGKey
 ) -> State:
-    inp = jnp.concatenate([prior_state.state, obs_emb], axis=-1)
-    hidden = nn.elu(posterior.fc_input(inp))
-
-    latent = posterior.fc_latent(hidden)
-    mean, std, sample = forward_normal(latent, key)
-    return State(mean, std, sample, prior_state.state)
-
-
-def forward_model(
-    model: Model,
-    obs_seq: Array,
-    action_seq: Array,
-    key: jr.PRNGKey,
-) -> Tuple[Array, State, State]:
-
-    obs_emb_seq = vmap(lambda o: forward_encoder(model.encoder, o))(obs_seq)
-    init_post = init_post_state(model)
-    post_seq, prior_seq = rollout_dynamics(
-        model.prior, model.posterior, obs_emb_seq, init_post, action_seq, key
-    )
-    out_seq = vmap(lambda s: forward_decoder(model.decoder, s))(post_seq)
-    return out_seq, post_seq, prior_seq
-
-
-def forward_dynamics(
-    prior: Prior,
-    post: Posterior,
-    obs: Array,
-    prev_post: State,
-    action: Array,
-    key: jr.PRNGKey,
-) -> State:
-    keys = jr.split(key, 2)
-    prior_ = forward_prior(prior, prev_post, action, keys[0])
-    post_ = forward_posterior(post, obs, prior_, keys[1])
-    return post_, prior_
+    inp = jnp.concatenate([obs_emb, prior_state.state], axis=-1)
+    hidden = nn.silu(post.fc_input(inp))
+    logits = post.fc_logits(hidden).reshape(post.num_discrete, post.discrete_dim)
+    logits, sample = sample_logits(logits, key)
+    return State(logits, sample, prior_state.state)
 
 
 def forward_encoder(encoder: Encoder, obs: Array) -> Array:
-    hidden = nn.elu(encoder.fc1(obs))
+    hidden = nn.silu(encoder.fc1(obs))
     return encoder.fc2(hidden)
 
 
 def forward_decoder(decoder: Decoder, post: State) -> Array:
-    inp = jnp.concatenate([post.latent, post.state], axis=-1)
-    hidden = nn.elu(decoder.fc1(inp))
+    inp = jnp.concatenate([post.sample.reshape(-1), post.state], axis=-1)
+    hidden = nn.silu(decoder.fc1(inp))
     return decoder.fc2(hidden)
-
-
-def forward_normal(out: Array, key: jr.PRNGKey) -> Tuple[Array, Array, Array]:
-    mean, std = jnp.split(out, 2, axis=-1)
-    std = nn.softplus(std) + 0.1
-    sample = mean + std * jr.normal(key, mean.shape)
-    return mean, std, sample
 
 
 def rollout_dynamics(
@@ -131,23 +88,20 @@ def rollout_dynamics(
 ) -> Tuple[State, State]:
     def step(prev_post, step):
         k_, ob_, act_ = step
-        post_, prior_ = forward_dynamics(prior, post, ob_, prev_post, act_, k_)
+        keys = jr.split(k_, 2)
+        prior_ = forward_prior(prior, prev_post, act_, keys[0])
+        post_ = forward_posterior(post, ob_, prior_, keys[1])
         return post_, (post_, prior_)
 
     keys = jr.split(key, action_seq.shape[0])
     final_post, (post_seq, prior_seq) = lax.scan(
-        step,
-        init_post,
-        (keys, obs_emb_seq, action_seq),
+        step, init_post, (keys, obs_emb_seq, action_seq)
     )
     return post_seq, prior_seq
 
 
 def rollout_dynamics_prior(
-    prior: Prior,
-    init_post: State,
-    action_seq: Array,
-    key: jr.PRNGKey,
+    prior: Prior, init_post: State, action_seq: Array, key: jr.PRNGKey
 ) -> State:
     def step(prev_s, step):
         k_, act_ = step
@@ -159,10 +113,33 @@ def rollout_dynamics_prior(
     return states
 
 
+def forward_model(
+    model: Model, obs_seq: Array, action_seq: Array, key: jr.PRNGKey
+) -> Tuple[Array, State, State]:
+    obs_emb_seq = vmap(lambda o: forward_encoder(model.encoder, o))(obs_seq)
+    init_p = init_post_state(model)
+    post_seq, prior_seq = rollout_dynamics(
+        model.prior, model.posterior, obs_emb_seq, init_p, action_seq, key
+    )
+    out_seq = vmap(lambda s: forward_decoder(model.decoder, s))(post_seq)
+    return out_seq, post_seq, prior_seq
+
+
+def sample_logits(logits: Array, key: jr.PRNGKey, unimix: float = 0.01) -> Array:
+    probs = nn.softmax(logits, axis=-1)
+    uniform = jnp.ones_like(probs) / probs.shape[-1]
+    probs = (1.0 - unimix) * probs + unimix * uniform
+    dist_logits = jnp.log(probs + 1e-8)
+    sample = jr.categorical(key, dist_logits, axis=-1)
+    onehot = nn.one_hot(sample, probs.shape[-1])
+    st_sample = onehot + (probs - lax.stop_gradient(probs))
+    return dist_logits, st_sample
+
+
 def init_post_state(model: Model, batch_shape: tuple = ()) -> State:
+    post = model.posterior
     return State(
-        mean=jnp.zeros(batch_shape + (model.latent_dim,)),
-        std=jnp.ones(batch_shape + (model.latent_dim,)),
-        latent=jnp.zeros(batch_shape + (model.latent_dim,)),
+        logits=jnp.zeros(batch_shape + (post.num_discrete, post.discrete_dim)),
+        sample=jnp.zeros(batch_shape + (post.num_discrete, post.discrete_dim)),
         state=jnp.zeros(batch_shape + (model.state_dim,)),
     )

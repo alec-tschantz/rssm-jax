@@ -7,4 +7,4 @@ from .model import (
     rollout_dynamics_prior,
 )
 
-from .utils import init_model, mse_loss, kl_divergence
+from .utils import init_model, mse_loss, kl_loss
