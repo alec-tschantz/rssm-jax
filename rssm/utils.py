@@ -41,30 +41,17 @@ def init_prior(
     hidden_dim: int,
     key: jr.PRNGKey,
 ) -> Prior:
-
-    k1, k2, k3, k4 = jr.split(key, 4)
     logit_dim = num_discrete * discrete_dim
+    k1, k2, k3, k4, k5, k6 = jr.split(key, 6)
     return Prior(
         fc_input=eqx.nn.Linear(
-            in_features=action_dim + logit_dim,
-            out_features=hidden_dim,
-            key=k1,
+            in_features=action_dim + logit_dim, out_features=hidden_dim, key=k1
         ),
-        rnn_cell=eqx.nn.GRUCell(
-            input_size=hidden_dim,
-            hidden_size=state_dim,
-            key=k2,
-        ),
-        fc_state=eqx.nn.Linear(
-            in_features=state_dim,
-            out_features=hidden_dim,
-            key=k3,
-        ),
-        fc_logits=eqx.nn.Linear(
-            in_features=hidden_dim,
-            out_features=logit_dim,
-            key=k4,
-        ),
+        norm_input=eqx.nn.RMSNorm(shape=hidden_dim),
+        rnn_cell=eqx.nn.GRUCell(input_size=hidden_dim, hidden_size=state_dim, key=k3),
+        fc_state=eqx.nn.Linear(in_features=state_dim, out_features=hidden_dim, key=k4),
+        norm_state=eqx.nn.RMSNorm(shape=hidden_dim),
+        fc_logits=eqx.nn.Linear(in_features=hidden_dim, out_features=logit_dim, key=k6),
         num_discrete=num_discrete,
         discrete_dim=discrete_dim,
     )
@@ -78,19 +65,14 @@ def init_posterior(
     hidden_dim: int,
     key: jr.PRNGKey,
 ) -> Posterior:
-    k1, k2 = jr.split(key, 2)
     logit_dim = num_discrete * discrete_dim
+    k1, k2, k3 = jr.split(key, 3)
     return Posterior(
         fc_input=eqx.nn.Linear(
-            in_features=state_dim + embed_dim,
-            out_features=hidden_dim,
-            key=k1,
+            in_features=state_dim + embed_dim, out_features=hidden_dim, key=k1
         ),
-        fc_logits=eqx.nn.Linear(
-            in_features=hidden_dim,
-            out_features=logit_dim,
-            key=k2,
-        ),
+        norm_input=eqx.nn.RMSNorm(shape=hidden_dim),
+        fc_logits=eqx.nn.Linear(in_features=hidden_dim, out_features=logit_dim, key=k3),
         num_discrete=num_discrete,
         discrete_dim=discrete_dim,
     )
@@ -102,10 +84,12 @@ def init_encoder(
     hidden_dim: int,
     key: jr.PRNGKey,
 ) -> Encoder:
-    k1, k2 = jr.split(key, 2)
+    k1, k2, k3, k4 = jr.split(key, 4)
     return Encoder(
         fc1=eqx.nn.Linear(in_features=obs_dim, out_features=hidden_dim, key=k1),
-        fc2=eqx.nn.Linear(in_features=hidden_dim, out_features=embed_dim, key=k2),
+        norm1=eqx.nn.RMSNorm(shape=hidden_dim),
+        fc2=eqx.nn.Linear(in_features=hidden_dim, out_features=embed_dim, key=k3),
+        norm2=eqx.nn.RMSNorm(shape=embed_dim),
     )
 
 
@@ -118,16 +102,12 @@ def init_decoder(
     key: jr.PRNGKey,
 ) -> Decoder:
     logit_dim = num_discrete * discrete_dim
-    k1, k2 = jr.split(key, 2)
+    k1, k2, k3, k4 = jr.split(key, 4)
     return Decoder(
         fc1=eqx.nn.Linear(
-            in_features=state_dim + logit_dim,
-            out_features=hidden_dim,
-            key=k1,
+            in_features=state_dim + logit_dim, out_features=hidden_dim, key=k1
         ),
-        fc2=eqx.nn.Linear(
-            in_features=hidden_dim,
-            out_features=obs_dim,
-            key=k2,
-        ),
+        norm1=eqx.nn.RMSNorm(shape=hidden_dim),
+        fc2=eqx.nn.Linear(in_features=hidden_dim, out_features=obs_dim, key=k3),
+        norm2=eqx.nn.RMSNorm(shape=obs_dim),
     )
