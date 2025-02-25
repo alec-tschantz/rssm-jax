@@ -137,6 +137,7 @@ def rollout_prior(
     return states
 
 
+# TODO: gumbel softmax
 def sample_logits(
     logits: Array, key: jr.PRNGKey, unimix: float = 0.01
 ) -> Tuple[Array, Array]:
