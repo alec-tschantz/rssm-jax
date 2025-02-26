@@ -60,7 +60,8 @@ def forward_prior(
     hidden = prior.norm_input(nn.silu(prior.fc_input(feat)))
     state = prior.rnn_cell(hidden, prev_post.state)
     hidden = prior.norm_state(nn.silu(prior.fc_state(state)))
-    logits = prior.fc_logits(hidden).reshape(prior.num_discrete, prior.discrete_dim)
+    logits = prior.fc_logits(hidden)
+    logits = logits.reshape(prior.num_discrete, prior.discrete_dim)
     logits, sample = sample_logits(logits, key)
     return State(logits, sample, state)
 
@@ -137,7 +138,6 @@ def rollout_prior(
     return states
 
 
-# TODO: gumbel softmax
 def sample_logits(
     logits: Array, key: jr.PRNGKey, unimix: float = 0.01
 ) -> Tuple[Array, Array]:
